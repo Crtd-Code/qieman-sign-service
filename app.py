@@ -66,5 +66,6 @@ def close_browser(e=None):
         asyncio.run(browser.close())
 
 if __name__ == '__main__':
-    # 限制并发请求数，防止内存溢出
-    app.run(host='0.0.0.0', port=10000, threaded=False)
+    # 读取 Railway 分配的端口，默认 10000
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
