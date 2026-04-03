@@ -1,16 +1,19 @@
-# 官方预构建的 Chrome + Python 镜像，解决所有依赖问题
-FROM selenium/standalone-chrome:latest
+FROM python:3.9-slim
 
-# 切换到 root 用户安装依赖
-USER root
-RUN apt-get update && apt-get install -y python3 python3-pip
 WORKDIR /app
+
+# 安装轻量级浏览器依赖
+RUN apt-get update && apt-get install -y \
+    chromium \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装Python依赖
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制代码
 COPY . .
 
-# 安装 Python 依赖
-RUN pip3 install flask selenium --no-cache-dir
-
-# 启动服务（和 app.py 端口一致）
-CMD ["python3", "app.py"]
+# 启动服务
+CMD ["python", "app.py"]
