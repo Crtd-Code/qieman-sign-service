@@ -1,10 +1,11 @@
+import os
 from flask import Flask, jsonify
 import asyncio
 from pyppeteer import launch
 
 app = Flask(__name__)
 
-# 全局复用浏览器实例（关键优化）
+# 全局复用浏览器实例（关键：避免每次请求新建浏览器导致内存溢出）
 browser = None
 
 async def init_browser():
@@ -24,7 +25,6 @@ async def init_browser():
                 "--no-first-run",
                 "--mute-audio"
             ],
-            # 关键：限制浏览器内存
             ignoreHTTPSErrors=True,
             defaultViewport={"width": 1280, "height": 720}
         )
@@ -33,7 +33,7 @@ async def init_browser():
 async def get_sign():
     browser = await init_browser()
     page = await browser.newPage()
-    await page.goto("https://qieman.com", {"waitUntil": "networkidle0", "timeout": 10000})
+    await page.goto("https://qieman.com", {"waitUntil": "networkidle0", "timeout": 15000})
     
     x_sign = await page.evaluate('''
         () => {
@@ -44,7 +44,7 @@ async def get_sign():
     await page.close()
     return x_sign
 
-# 健康检查路由（Render要求）
+# 健康检查路由（Railway 必须，否则会判定服务异常）
 @app.route('/')
 def health_check():
     return "OK", 200
@@ -66,6 +66,7 @@ def close_browser(e=None):
         asyncio.run(browser.close())
 
 if __name__ == '__main__':
-    # 读取 Railway 分配的端口，默认 10000
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    # 读取 Railway 自动分配的端口（默认 10000）
+    port = int(os.environ.get("PORT", 10000))
+    # 禁用多线程，避免并发请求导致内存爆炸
+    app.run(host='0.0.0.0', port=port, threaded=False)
