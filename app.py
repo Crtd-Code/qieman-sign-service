@@ -1,48 +1,86 @@
 import os
-import time
-import requests
+import asyncio
+import threading
 from flask import Flask, jsonify
+from pyppeteer import launch
 
 app = Flask(__name__)
+browser = None
 
-# 模拟真实浏览器请求头
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/144.0.0.0 Safari/537.36",
-    "Referer": "https://qieman.com/"
-}
+# 🔥 核心修复：服务启动时（主线程）初始化浏览器，彻底解决信号报错
+async def init_browser_on_startup():
+    global browser
+    browser = await launch(
+        executablePath="/usr/bin/chromium",
+        args=[
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--single-process",
+            "--disable-gpu",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        ],
+        headless=True,
+        handle_SIGINT=False,
+        handle_SIGTERM=False,
+        handle_SIGHUP=False
+    )
 
-# 生成【且慢官方标准格式】X-Sign（13位时间戳+加密串，大写）
-def generate_x_sign():
-    timestamp = str(int(time.time() * 1000))
-    # 官方标准格式签名（可直接用于接口请求）
-    official_sign = f"{timestamp}7B5B48BE0AE68F6B33B0FA40C1BC2CF7"
-    return official_sign
+# 后台线程初始化浏览器（不阻塞Flask启动）
+def browser_background_init():
+    asyncio.run(init_browser_on_startup())
+
+# 服务启动时自动初始化浏览器
+threading.Thread(target=browser_background_init, daemon=True).start()
+
+# 🎯 捕获真实X-Sign（监听浏览器请求头）
+async def get_real_x_sign():
+    global browser
+    if not browser:
+        return None
+
+    real_sign = None
+    event = asyncio.Event()
+
+    def intercept_request(req):
+        nonlocal real_sign
+        # 监听且慢接口的请求头，抓大写 X-Sign
+        if "pmdj" in req.url:
+            headers = req.headers
+            if "X-Sign" in headers:
+                real_sign = headers["X-Sign"]
+                event.set()
+
+    page = await browser.newPage()
+    page.on("request", intercept_request)
+    
+    # 访问会触发X-Sign的页面
+    await page.goto("https://qieman.com", waitUntil="networkidle2", timeout=20000)
+    await asyncio.sleep(3)
+    
+    try:
+        await asyncio.wait_for(event.wait(), timeout=5)
+    except:
+        pass
+    
+    await page.close()
+    return real_sign
 
 # 健康检查
 @app.route("/")
-def health():
+def index():
     return "OK", 200
 
-# 核心接口：严格返回大写 X-Sign
+# 🔥 核心接口：返回真实有效的X-Sign（Postman直接可用）
 @app.route("/get-sign")
 def get_sign():
-    try:
-        # 建立会话（复用外网连接）
-        session = requests.Session()
-        session.get("https://qieman.com", headers=HEADERS, timeout=8)
-        
-        # 返回标准 X-Sign（大写，和你要求完全一致）
-        return jsonify({
-            "code": 200,
-            "X-Sign": generate_x_sign()
-        })
-    except Exception as e:
-        return jsonify({
-            "code": 200,
-            "X-Sign": generate_x_sign()
-        })
+    sign = asyncio.run(get_real_x_sign())
+    return jsonify({
+        "code": 200,
+        "X-Sign": sign if sign else "刷新重试"
+    })
 
-# Render 强制 5000 端口
+# Render固定端口
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
