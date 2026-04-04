@@ -7,61 +7,67 @@ from pyppeteer import launch
 app = Flask(__name__)
 browser = None
 
-# 初始化浏览器（Render低内存优化）
-async def init_browser():
+# 全局复用浏览器，避免每次请求重启
+async def get_browser():
     global browser
     if browser is None:
+        # 强制使用系统 Chromium，不下载
         browser = await launch({
-            'headless': True,
-            'args': [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--single-process',
+            "executablePath": "/usr/bin/chromium",
+            "args": [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--single-process",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-default-apps",
             ],
+            "headless": True,
+            "ignoreHTTPSErrors": True,
         })
     return browser
 
-# 获取真实 x-sign（修正网址+修正key）
-async def get_real_xsign():
+# 获取 x-sign
+async def fetch_xsign():
     try:
-        br = await init_browser()
+        br = await get_browser()
         page = await br.newPage()
         page.setDefaultNavigationTimeout(15000)
         
-        # ✅ 修正：正确网址 且慢官网
-        await page.goto('https://qieman.com', {'waitUntil': 'networkidle2'})
+        # 访问且慢官网
+        await page.goto("https://qieman.com", {"waitUntil": "networkidle2"})
         await asyncio.sleep(3)
         
-        # ✅ 修正：正确获取 x-sign（匹配你的请求头）
-        x_sign = await page.evaluate('''() => {
+        # 提取 x-sign
+        xsign = await page.evaluate("""() => {
             return localStorage.getItem('x-sign') || document.cookie.match(/x-sign=([^;]+)/)?.[1];
-        }''')
+        }""")
         
         await page.close()
-        return x_sign
+        return xsign
     except Exception as e:
-        print(f"错误：{str(e)}")
-        return None
+        print(f"Error: {traceback.format_exc()}")
+        raise e
 
 # 健康检查
-@app.route('/')
+@app.route("/")
 def health():
     return "OK", 200
 
 # 核心接口
-@app.route('/get-sign')
+@app.route("/get-sign")
 def get_sign():
     try:
-        x_sign = asyncio.run(asyncio.wait_for(get_real_xsign(), timeout=25))
-        if x_sign:
-            return jsonify({"code":200, "x-sign":x_sign})
-        return jsonify({"code":500, "msg":"未获取到签名"}),500
+        xsign = asyncio.run(asyncio.wait_for(fetch_xsign(), timeout=25))
+        if xsign:
+            return jsonify({"code": 200, "x-sign": xsign})
+        return jsonify({"code": 500, "error": "No x-sign found"}), 500
     except Exception as e:
-        return jsonify({"code":500, "error":str(e)}),500
+        return jsonify({"code": 500, "error": str(e), "trace": traceback.format_exc()}), 500
 
-# ✅ 强制 Render 5000 端口（核心修复）
-if __name__ == '__main__':
+# 端口配置（Render 5000）
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
